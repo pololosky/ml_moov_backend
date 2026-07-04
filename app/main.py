@@ -47,11 +47,11 @@ async def root():
 
 @app.get("/health")
 async def health():
+    import sklearn
+    modeles = ml_models.status()
+    all_loaded = all(v["loaded"] for v in modeles.values())
     return {
-        "status": "ok",
-        "modeles": {
-            "churn": ml_models.churn_model is not None,
-            "segmentation": ml_models.segmentation_model is not None,
-            "fraude": ml_models.fraude_model is not None,
-        },
+        "status": "ok" if all_loaded else "degraded",
+        "sklearn_version": sklearn.__version__,
+        "modeles": modeles,
     }

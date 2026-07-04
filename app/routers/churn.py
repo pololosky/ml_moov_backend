@@ -116,7 +116,11 @@ async def get_client_churn(client_id: str, db: AsyncSession = Depends(get_db)):
 async def run_churn_predictions(db: AsyncSession = Depends(get_db)):
     """Applique le modèle ML sur la table churn et met à jour churn_flag."""
     if ml_models.churn_model is None:
-        raise HTTPException(503, "Modèle churn non chargé. Déposez model.pkl dans models/churn/")
+        error_detail = ml_models.churn_load_error or "Modèle non chargé"
+        raise HTTPException(
+            503,
+            f"Modèle churn indisponible. {error_detail}"
+        )
 
     import pandas as pd
     result = await db.execute(text("SELECT * FROM churn"))

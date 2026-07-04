@@ -113,7 +113,11 @@ async def get_transaction_fraude(transaction_id: int, db: AsyncSession = Depends
 async def run_fraude_detection(db: AsyncSession = Depends(get_db)):
     """Applique le modèle ML sur la table fraude et met à jour fraude_flag."""
     if ml_models.fraude_model is None:
-        raise HTTPException(503, "Modèle fraude non chargé. Déposez model.pkl dans models/fraude/")
+        error_detail = ml_models.fraude_load_error or "Modèle non chargé"
+        raise HTTPException(
+            503,
+            f"Modèle fraude indisponible. {error_detail}"
+        )
 
     import pandas as pd
     result = await db.execute(text("SELECT * FROM fraude"))

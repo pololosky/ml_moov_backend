@@ -107,7 +107,11 @@ async def get_client_segment(client_id: str, db: AsyncSession = Depends(get_db))
 async def run_segmentation(db: AsyncSession = Depends(get_db)):
     """Applique le modèle de clustering et crée une colonne segment_id (si elle existe) ou retourne les clusters."""
     if ml_models.segmentation_model is None:
-        raise HTTPException(503, "Modèle segmentation non chargé.")
+        error_detail = ml_models.segmentation_load_error or "Modèle non chargé"
+        raise HTTPException(
+            503,
+            f"Modèle segmentation indisponible. {error_detail}"
+        )
 
     import pandas as pd
     result = await db.execute(text("SELECT * FROM segmentation"))

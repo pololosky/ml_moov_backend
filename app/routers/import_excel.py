@@ -34,20 +34,20 @@ TABLE_COLUMNS = {
         "date_recrutement", "plafond_journalier_fcfa", "statut", "anciennete_mois",
     ],
     "fact_conso_mensuelle": [
-        "client_id", "mois", "nb_appels_sortants", "duree_voix_out_min",
+        "conso_id","client_id", "mois", "nb_appels_sortants", "duree_voix_out_min",
         "duree_voix_in_min", "nb_sms_envoyes", "volume_data_mo", "nb_recharges",
         "montant_recharge_fcfa", "nb_jours_actifs", "solde_moyen_fcfa",
         "nb_tx_flooz", "roaming_flag",
     ],
     "fact_evenement_service_client": [
-        "client_id", "date_evenement", "canal", "type_evenement",
+        "evenement_id","client_id", "date_evenement", "canal", "type_evenement",
         "categorie", "statut_resolution", "delai_resolution_h", "satisfaction_score",
     ],
     "fact_transaction_agent": [
         "transaction_id", "agent_id", "date_heure", "type_transaction",
         "montant_fcfa", "msisdn_benef_hash", "zone_logique", "canal",
         "solde_avant_fcfa", "solde_apres_fcfa", "nb_tx_24h",
-        "ecart_zone_habituelle", "fraude_flag",
+        "ecart_zone_habituelle", #"fraude_flag",
     ],
 }
 
