@@ -1,5 +1,6 @@
-from sqlalchemy import String, Integer, Boolean, Date, Numeric, ForeignKey, UniqueConstraint
+from sqlalchemy import String, Integer, Boolean, Date, Numeric, TIMESTAMP, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql import func
 from app.database import Base
 
 
@@ -21,6 +22,7 @@ class FactConsoMensuelle(Base):
     solde_moyen_fcfa: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
     nb_tx_flooz: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     roaming_flag: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    # colonne1 supprimée — erreur de conception, sans utilité
+    inserted_at: Mapped[str | None] = mapped_column(TIMESTAMP, server_default=func.now())
+    # colonne1 supprimée — erreur de conception
 
     client: Mapped["DimClient"] = relationship("DimClient", back_populates="consommations")
