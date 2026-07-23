@@ -8,17 +8,17 @@ GET  /api/fraude/stats              — KPIs depuis prediction_fraude (is_latest
 GET  /api/fraude/predictions        — Alertes actives paginées (is_latest=TRUE)
 GET  /api/fraude/transaction/{id}   — Prédiction active d'une transaction
 GET  /api/fraude/pending-count      — Nb transactions sans prédiction is_latest
-PUT  /api/fraude/{pred_id}/statut   — Changer statut (Nouvelle→Traitee|Ignoree)
+GET  /api/fraude/history/{id}       — Historique complet d'une transaction
 POST /api/fraude/run                — Inférence sur features_fraude non traitées
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from pydantic import BaseModel
 
 from app.database import get_db
 from app.ml.model_loader import ml_models
 from app.config import settings
+from app.utils import clean_row, clean_rows
 
 router = APIRouter(prefix="/api/fraude", tags=["Fraude"])
 
@@ -27,29 +27,22 @@ TYPE_TX_LABELS = {0: "Recharge crédit", 1: "Transfert P2P", 2: "Cash-out Flooz"
 TYPE_AGENT_LABELS = {0: "Détaillant", 1: "Master", 2: "Sous-distributeur"}
 
 
-class StatutUpdate(BaseModel):
-    statut: str  # Nouvelle | Traitee | Ignoree
-
-
 @router.get("/stats")
 async def get_fraude_stats(db: AsyncSession = Depends(get_db)):
     """KPIs depuis prediction_fraude (is_latest=TRUE)."""
     result = await db.execute(
         text("""
             SELECT
-                COUNT(*)                                                        AS total,
-                SUM(CASE WHEN fraude_flag = 1 THEN 1 ELSE 0 END)               AS frauduleuses,
-                SUM(CASE WHEN fraude_flag = 0 THEN 1 ELSE 0 END)               AS normales,
-                ROUND(AVG(score_fraude)::numeric, 4)                           AS score_moyen,
-                SUM(CASE WHEN statut = 'Nouvelle' AND fraude_flag = 1
-                          THEN 1 ELSE 0 END)                                   AS alertes_en_attente
+                COUNT(*)                                                 AS total,
+                SUM(CASE WHEN fraude_flag = 1 THEN 1 ELSE 0 END)        AS frauduleuses,
+                SUM(CASE WHEN fraude_flag = 0 THEN 1 ELSE 0 END)        AS normales,
+                ROUND(AVG(score_fraude)::numeric, 4)                    AS score_moyen
             FROM prediction_fraude
             WHERE is_latest = TRUE
         """)
     )
     row = result.mappings().one_or_none()
     if not row:
-        # Fallback : nb de transactions dans features_fraude sans prédiction
         r2 = await db.execute(text("""
             SELECT COUNT(*) FROM features_fraude ff
             WHERE NOT EXISTS (
@@ -94,7 +87,6 @@ async def get_fraude_predictions(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     fraude_flag: int | None = Query(None, description="0=Normale | 1=Frauduleuse"),
-    statut: str | None = Query(None, description="Nouvelle | Traitee | Ignoree"),
     db: AsyncSession = Depends(get_db),
 ):
     """Prédictions actives (is_latest=TRUE) paginées, avec contexte agent."""
@@ -102,14 +94,12 @@ async def get_fraude_predictions(
     conditions = ["pf.is_latest = TRUE"]
     if fraude_flag is not None:
         conditions.append(f"pf.fraude_flag = {fraude_flag}")
-    if statut:
-        conditions.append(f"pf.statut = '{statut}'")
     where = "WHERE " + " AND ".join(conditions)
 
     result = await db.execute(
         text(f"""
             SELECT pf.id, pf.transaction_id, pf.score_fraude, pf.fraude_flag,
-                   pf.statut, pf.predicted_at, pf.model_run_id,
+                   pf.predicted_at, pf.model_run_id,
                    ff.agent_id, ff.type_transaction, ff.montant_fcfa,
                    ff.region, ff.nb_tx_24h, ff.ecart_zone_habituelle,
                    ff.ratio_montant_plafond, ff.agent_recent,
@@ -122,7 +112,7 @@ async def get_fraude_predictions(
         """),
         {"size": size, "offset": offset},
     )
-    rows = [dict(r) for r in result.mappings()]
+    rows = [clean_row(dict(r)) for r in result.mappings()]
     for r in rows:
         r["region_label"] = REGION_LABELS.get(r.get("region"), str(r.get("region")))
         r["type_label"] = TYPE_TX_LABELS.get(r.get("type_transaction"), str(r.get("type_transaction")))
@@ -138,7 +128,9 @@ async def get_transaction_fraude(transaction_id: int, db: AsyncSession = Depends
     """Prédiction active + features complètes d'une transaction."""
     result = await db.execute(
         text("""
-            SELECT pf.*, ff.agent_id, ff.type_transaction, ff.montant_fcfa,
+            SELECT pf.id, pf.transaction_id, pf.score_fraude, pf.fraude_flag,
+                   pf.predicted_at, pf.is_latest, pf.model_run_id,
+                   ff.agent_id, ff.type_transaction, ff.montant_fcfa,
                    ff.region, ff.zone_logique, ff.canal, ff.nb_tx_24h,
                    ff.ecart_zone_habituelle, ff.type_agent,
                    ff.plafond_journalier_fcfa, ff.anciennete_mois,
@@ -153,28 +145,11 @@ async def get_transaction_fraude(transaction_id: int, db: AsyncSession = Depends
     row = result.mappings().one_or_none()
     if not row:
         raise HTTPException(404, f"Aucune prédiction active pour la transaction {transaction_id}")
-    data = dict(row)
+    data = clean_row(dict(row))
     data["region_label"] = REGION_LABELS.get(data.get("region"), str(data.get("region")))
     data["type_label"] = TYPE_TX_LABELS.get(data.get("type_transaction"), str(data.get("type_transaction")))
     data["type_agent_label"] = TYPE_AGENT_LABELS.get(data.get("type_agent"), str(data.get("type_agent")))
     return data
-
-
-@router.put("/{pred_id}/statut")
-async def update_statut(pred_id: int, body: StatutUpdate, db: AsyncSession = Depends(get_db)):
-    """Met à jour le statut de traitement d'une alerte fraude."""
-    valid = {"Nouvelle", "Traitee", "Ignoree"}
-    if body.statut not in valid:
-        raise HTTPException(400, f"Statut invalide. Valeurs acceptées : {sorted(valid)}")
-
-    result = await db.execute(
-        text("UPDATE prediction_fraude SET statut = :statut WHERE id = :id RETURNING id"),
-        {"statut": body.statut, "id": pred_id},
-    )
-    if not result.fetchone():
-        raise HTTPException(404, f"Prédiction #{pred_id} introuvable")
-    await db.commit()
-    return {"message": "Statut mis à jour", "id": pred_id, "statut": body.statut}
 
 
 @router.get("/history/{transaction_id}")
@@ -182,20 +157,18 @@ async def get_fraude_history(transaction_id: int, db: AsyncSession = Depends(get
     """Historique complet des prédictions d'une transaction."""
     result = await db.execute(
         text("""
-            SELECT id, score_fraude, fraude_flag, statut, predicted_at, is_latest, model_run_id
+            SELECT id, score_fraude, fraude_flag, predicted_at, is_latest, model_run_id
             FROM prediction_fraude
             WHERE transaction_id = :id
             ORDER BY predicted_at DESC
         """),
         {"id": transaction_id},
     )
-    return [dict(r) for r in result.mappings()]
+    return clean_rows([dict(r) for r in result.mappings()])
 
 
 @router.post("/run")
-async def run_fraude_detection(
-    db: AsyncSession = Depends(get_db),
-):
+async def run_fraude_detection(db: AsyncSession = Depends(get_db)):
     """
     Inférence fraude sur features_fraude non encore traitées :
     1. Lit features_fraude WHERE transaction_id NOT IN (prediction_fraude is_latest)
@@ -209,7 +182,6 @@ async def run_fraude_detection(
 
     import pandas as pd
 
-    # Charger uniquement les transactions sans prédiction active
     result = await db.execute(text("""
         SELECT ff.*
         FROM features_fraude ff
@@ -218,7 +190,7 @@ async def run_fraude_detection(
             WHERE pf.transaction_id = ff.transaction_id AND pf.is_latest = TRUE
         )
     """))
-    rows = [dict(r) for r in result.mappings()]
+    rows = clean_rows([dict(r) for r in result.mappings()])
 
     if not rows:
         return {"message": "Toutes les transactions ont déjà une prédiction active", "count": 0}
@@ -229,7 +201,6 @@ async def run_fraude_detection(
     if missing:
         raise HTTPException(422, f"Colonnes manquantes dans features_fraude : {missing}")
 
-    # Créer un model_run
     run_result = await db.execute(
         text("""
             INSERT INTO model_run (cas_usage, modele_version, fichier_model, run_by)
@@ -245,28 +216,23 @@ async def run_fraude_detection(
 
     inserted = 0
     for tx_id, score, flag in zip(df["transaction_id"], scores, flags):
-        # Passer les anciennes prédictions à is_latest=FALSE
         await db.execute(
             text("UPDATE prediction_fraude SET is_latest = FALSE WHERE transaction_id = :id AND is_latest = TRUE"),
             {"id": int(tx_id)},
         )
-        # Insérer la nouvelle prédiction
         await db.execute(
             text("""
                 INSERT INTO prediction_fraude
-                    (transaction_id, model_run_id, score_fraude, fraude_flag, statut, is_latest)
-                VALUES (:tx_id, :run_id, :score, :flag, 'Nouvelle', TRUE)
+                    (transaction_id, model_run_id, score_fraude, fraude_flag, is_latest)
+                VALUES (:tx_id, :run_id, :score, :flag, TRUE)
             """),
-            {"tx_id": int(tx_id), "run_id": run_id,
-             "score": float(score), "flag": int(flag)},
+            {"tx_id": int(tx_id), "run_id": run_id, "score": float(score), "flag": int(flag)},
         )
         inserted += 1
 
-    # Mettre à jour le model_run
     await db.execute(
         text("UPDATE model_run SET nb_predictions = :nb WHERE id = :id"),
         {"nb": inserted, "id": run_id},
     )
-
     await db.commit()
     return {"message": f"{inserted} prédictions fraude insérées (run #{run_id})", "count": inserted, "run_id": run_id}

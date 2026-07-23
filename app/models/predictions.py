@@ -75,7 +75,6 @@ class PredictionFraude(Base):
     model_run_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("model_run.id"))
     score_fraude: Mapped[float] = mapped_column(Numeric(6, 4), nullable=False)
     fraude_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False)      # 0|1
-    statut: Mapped[str] = mapped_column(String(20), default="Nouvelle", nullable=False)  # Nouvelle|Traitee|Ignoree
     predicted_at: Mapped[str | None] = mapped_column(TIMESTAMP, server_default=func.now())
     is_latest: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

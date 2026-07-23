@@ -15,6 +15,7 @@ from sqlalchemy import text
 from app.database import get_db
 from app.ml.model_loader import ml_models
 from app.config import settings
+from app.utils import clean_row, clean_rows
 
 router = APIRouter(prefix="/api/churn", tags=["Churn"])
 
@@ -104,10 +105,10 @@ async def get_churn_predictions(
         """),
         {"size": size, "offset": offset},
     )
-    rows = [dict(r) for r in result.mappings()]
+    rows = [clean_row(dict(r)) for r in result.mappings()]
     for r in rows:
-        r["region_label"] = REGION_LABELS.get(r["region"], str(r["region"]))
-        r["type_client_label"] = TYPE_CLIENT_LABELS.get(r["type_client"], str(r["type_client"]))
+        r["region_label"] = REGION_LABELS.get(r.get("region"), str(r.get("region")))
+        r["type_client_label"] = TYPE_CLIENT_LABELS.get(r.get("type_client"), str(r.get("type_client")))
 
     count_result = await db.execute(
         text(f"SELECT COUNT(*) FROM prediction_churn pc WHERE pc.is_latest = TRUE {flag_filter}")
@@ -132,7 +133,7 @@ async def get_client_churn(client_id: str, db: AsyncSession = Depends(get_db)):
     row = result.mappings().one_or_none()
     if not row:
         raise HTTPException(404, f"Aucune prédiction active pour le client {client_id}")
-    data = dict(row)
+    data = clean_row(dict(row))
     data["region_label"] = REGION_LABELS.get(data.get("region", -1), str(data.get("region")))
     return data
 
@@ -233,4 +234,4 @@ async def get_churn_history(client_id: str, db: AsyncSession = Depends(get_db)):
         """),
         {"id": client_id},
     )
-    return [dict(r) for r in result.mappings()]
+    return clean_rows([dict(r) for r in result.mappings()])

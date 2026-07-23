@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from app.database import get_db
+from app.utils import clean_row, clean_rows
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
@@ -87,7 +88,7 @@ async def churn_by_region(db: AsyncSession = Depends(get_db)):
             ORDER BY churned DESC
         """)
     )
-    rows = [dict(r) for r in result.mappings()]
+    rows = [clean_row(dict(r)) for r in result.mappings()]
     for r in rows:
         r["region_label"] = REGION_LABELS.get(r.get("region"), str(r.get("region")))
         r["taux_pct"] = round((r["churned"] / (r["total"] or 1) * 100), 1)
@@ -110,7 +111,7 @@ async def fraude_by_type(db: AsyncSession = Depends(get_db)):
             ORDER BY frauduleuses DESC
         """)
     )
-    rows = [dict(r) for r in result.mappings()]
+    rows = [clean_row(dict(r)) for r in result.mappings()]
     for r in rows:
         r["type_label"] = TYPE_TX_LABELS.get(r.get("type_transaction"), str(r.get("type_transaction")))
         r["taux_pct"] = round((r["frauduleuses"] / (r["total"] or 1) * 100), 1)
@@ -129,7 +130,7 @@ async def recent_runs(limit: int = 10, db: AsyncSession = Depends(get_db)):
         """),
         {"limit": limit},
     )
-    return [dict(r) for r in result.mappings()]
+    return clean_rows([dict(r) for r in result.mappings()])
 
 
 @router.get("/import-history")
@@ -145,4 +146,4 @@ async def import_history(limit: int = 20, db: AsyncSession = Depends(get_db)):
         """),
         {"limit": limit},
     )
-    return [dict(r) for r in result.mappings()]
+    return clean_rows([dict(r) for r in result.mappings()])

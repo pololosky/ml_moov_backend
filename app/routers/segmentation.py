@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.ml.model_loader import ml_models
+from app.utils import clean_row, clean_rows
 
 router = APIRouter(prefix="/api/segmentation", tags=["Segmentation"])
 
@@ -64,7 +65,7 @@ async def get_segmentation_stats(db: AsyncSession = Depends(get_db)):
             ORDER BY ps.segment_id
         """)
     )
-    segments = [dict(r) for r in dist_result.mappings()]
+    segments = [clean_row(dict(r)) for r in dist_result.mappings()]
 
     # Nb clients en attente de (re)calcul
     pending = await db.execute(
@@ -80,7 +81,7 @@ async def get_segment_definitions(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         text("SELECT * FROM segment_definition ORDER BY segment_id")
     )
-    return [dict(r) for r in result.mappings()]
+    return clean_rows([dict(r) for r in result.mappings()])
 
 
 @router.put("/segments/{segment_id}")
@@ -153,7 +154,7 @@ async def get_segmentation_predictions(
         """),
         {"size": size, "offset": offset},
     )
-    rows = [dict(r) for r in result.mappings()]
+    rows = [clean_row(dict(r)) for r in result.mappings()]
     for r in rows:
         r["region_label"] = REGION_LABELS.get(r.get("region"), str(r.get("region")))
         r["type_client_label"] = TYPE_CLIENT_LABELS.get(r.get("type_client"), str(r.get("type_client")))
@@ -188,7 +189,7 @@ async def get_client_segment(client_id: str, db: AsyncSession = Depends(get_db))
     row = result.mappings().one_or_none()
     if not row:
         raise HTTPException(404, f"Aucun segment actif pour le client {client_id}")
-    data = dict(row)
+    data = clean_row(dict(row))
     data["region_label"] = REGION_LABELS.get(data.get("region"), str(data.get("region")))
     return data
 
@@ -207,7 +208,7 @@ async def get_segmentation_history(client_id: str, db: AsyncSession = Depends(ge
         """),
         {"id": client_id},
     )
-    return [dict(r) for r in result.mappings()]
+    return clean_rows([dict(r) for r in result.mappings()])
 
 
 @router.post("/run")
@@ -231,7 +232,7 @@ async def run_segmentation(
 
     where_pending = "WHERE needs_retraining = TRUE" if only_pending else ""
     result = await db.execute(text(f"SELECT * FROM features_segmentation {where_pending}"))
-    rows = [dict(r) for r in result.mappings()]
+    rows = clean_rows([dict(r) for r in result.mappings()])
 
     if not rows:
         return {"message": "Aucun client à traiter", "count": 0}
