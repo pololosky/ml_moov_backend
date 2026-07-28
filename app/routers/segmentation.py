@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.ml.model_loader import ml_models
 from app.utils import clean_row, clean_rows
+from app.auth import RequireDashboard, RequireModelRun
 
 router = APIRouter(prefix="/api/segmentation", tags=["Segmentation"])
 
@@ -44,7 +45,7 @@ class SegmentDefinitionUpdate(BaseModel):
 
 
 @router.get("/stats")
-async def get_segmentation_stats(db: AsyncSession = Depends(get_db)):
+async def get_segmentation_stats(current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """Distribution des clients par segment (is_latest=TRUE), avec labels."""
     total_result = await db.execute(
         text("SELECT COUNT(*) FROM prediction_segment WHERE is_latest = TRUE")
@@ -76,7 +77,7 @@ async def get_segmentation_stats(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/segments")
-async def get_segment_definitions(db: AsyncSession = Depends(get_db)):
+async def get_segment_definitions(current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """Retourne toutes les définitions de segments (pour l'interface de nommage)."""
     result = await db.execute(
         text("SELECT * FROM segment_definition ORDER BY segment_id")
@@ -213,7 +214,8 @@ async def get_segmentation_history(client_id: str, db: AsyncSession = Depends(ge
 
 @router.post("/run")
 async def run_segmentation(
-    only_pending: bool = Query(False, description="Traiter uniquement les clients needs_retraining=TRUE"),
+    current_user: RequireModelRun,
+    only_pending: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
     """

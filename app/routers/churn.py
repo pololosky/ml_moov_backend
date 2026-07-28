@@ -16,6 +16,7 @@ from app.database import get_db
 from app.ml.model_loader import ml_models
 from app.config import settings
 from app.utils import clean_row, clean_rows
+from app.auth import RequireDashboard, RequireModelRun
 
 router = APIRouter(prefix="/api/churn", tags=["Churn"])
 
@@ -24,7 +25,7 @@ TYPE_CLIENT_LABELS = {0: "Particulier", 1: "PME", 2: "Corporate"}
 
 
 @router.get("/stats")
-async def get_churn_stats(db: AsyncSession = Depends(get_db)):
+async def get_churn_stats(current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """KPIs depuis prediction_churn (is_latest=TRUE) + moyennes features_churn."""
     result = await db.execute(
         text("""
@@ -71,7 +72,7 @@ async def get_churn_stats(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/pending-count")
-async def get_pending_count(db: AsyncSession = Depends(get_db)):
+async def get_pending_count(current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """Nombre de clients marqués needs_retraining=TRUE."""
     result = await db.execute(
         text("SELECT COUNT(*) FROM features_churn WHERE needs_retraining = TRUE")
@@ -81,6 +82,7 @@ async def get_pending_count(db: AsyncSession = Depends(get_db)):
 
 @router.get("/predictions")
 async def get_churn_predictions(
+    current_user: RequireDashboard,
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     churn_flag: int | None = Query(None, description="0=Non churné | 1=Churné"),
@@ -117,7 +119,7 @@ async def get_churn_predictions(
 
 
 @router.get("/client/{client_id}")
-async def get_client_churn(client_id: str, db: AsyncSession = Depends(get_db)):
+async def get_client_churn(client_id: str, current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """Prédiction active + features d'un client."""
     result = await db.execute(
         text("""
@@ -140,8 +142,9 @@ async def get_client_churn(client_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/run")
 async def run_churn_predictions(
-    horizon_jours: int = Query(30, ge=1, description="Horizon de prédiction en jours"),
-    only_pending: bool = Query(False, description="Traiter uniquement les clients needs_retraining=TRUE"),
+    current_user: RequireModelRun,
+    horizon_jours: int = Query(30, ge=1),
+    only_pending: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -222,7 +225,7 @@ async def run_churn_predictions(
 
 
 @router.get("/history/{client_id}")
-async def get_churn_history(client_id: str, db: AsyncSession = Depends(get_db)):
+async def get_churn_history(client_id: str, current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """Historique complet des prédictions d'un client."""
     result = await db.execute(
         text("""

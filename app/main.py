@@ -5,18 +5,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.ml.model_loader import ml_models
 from app.routers import churn, segmentation, fraude, import_excel, dashboard
+from app import auth
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Chargement des modèles ML au démarrage
     ml_models.load_all()
     yield
 
 
 app = FastAPI(
     title="Moov Africa Togo — ML Analytics API",
-    description="API FastAPI pour la prédiction du churn, la segmentation client et la détection de fraude.",
+    description="API FastAPI · Churn · Fraude · Segmentation · Auth JWT",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -29,6 +29,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Auth en premier
+app.include_router(auth.router)
+
+# Routes métier (protégées par dépendances RBAC internes à chaque router)
 app.include_router(dashboard.router)
 app.include_router(churn.router)
 app.include_router(segmentation.router)
@@ -38,20 +42,15 @@ app.include_router(import_excel.router)
 
 @app.get("/")
 async def root():
-    return {
-        "app": "Moov Africa Togo — ML Analytics API",
-        "version": "1.0.0",
-        "docs": "/docs",
-    }
+    return {"app": "Moov Africa Togo — ML Analytics API", "version": "1.0.0", "docs": "/docs"}
 
 
 @app.get("/health")
 async def health():
     import sklearn
     modeles = ml_models.status()
-    all_loaded = all(v["loaded"] for v in modeles.values())
     return {
-        "status": "ok" if all_loaded else "degraded",
+        "status": "ok" if all(v["loaded"] for v in modeles.values()) else "degraded",
         "sklearn_version": sklearn.__version__,
         "modeles": modeles,
     }

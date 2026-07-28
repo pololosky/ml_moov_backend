@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from app.database import get_db
 from app.utils import clean_row, clean_rows
+from app.auth import RequireDashboard
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
@@ -22,7 +23,7 @@ TYPE_TX_LABELS = {0: "Recharge crédit", 1: "Transfert P2P", 2: "Cash-out Flooz"
 
 
 @router.get("/overview")
-async def get_overview(db: AsyncSession = Depends(get_db)):
+async def get_overview(current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """
     KPIs globaux :
     - Données sources (dim_client, dim_agent, fact_transaction)
@@ -73,7 +74,7 @@ async def get_overview(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/churn-by-region")
-async def churn_by_region(db: AsyncSession = Depends(get_db)):
+async def churn_by_region(current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """Taux de churn par région (depuis prediction_churn × features_churn is_latest)."""
     result = await db.execute(
         text("""
@@ -96,7 +97,7 @@ async def churn_by_region(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/fraude-by-type")
-async def fraude_by_type(db: AsyncSession = Depends(get_db)):
+async def fraude_by_type(current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """Distribution des fraudes par type de transaction (is_latest)."""
     result = await db.execute(
         text("""
@@ -119,7 +120,7 @@ async def fraude_by_type(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/recent-runs")
-async def recent_runs(limit: int = 10, db: AsyncSession = Depends(get_db)):
+async def recent_runs(current_user: RequireDashboard, limit: int = 10, db: AsyncSession = Depends(get_db)):
     """Derniers runs de modèles (model_run), pour l'historique du dashboard."""
     result = await db.execute(
         text("""
@@ -134,7 +135,7 @@ async def recent_runs(limit: int = 10, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/import-history")
-async def import_history(limit: int = 20, db: AsyncSession = Depends(get_db)):
+async def import_history(current_user: RequireDashboard, limit: int = 20, db: AsyncSession = Depends(get_db)):
     """Historique des imports de fichiers Excel (import_log)."""
     result = await db.execute(
         text("""

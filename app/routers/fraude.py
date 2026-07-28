@@ -19,6 +19,7 @@ from app.database import get_db
 from app.ml.model_loader import ml_models
 from app.config import settings
 from app.utils import clean_row, clean_rows
+from app.auth import RequireDashboard, RequireModelRun
 
 router = APIRouter(prefix="/api/fraude", tags=["Fraude"])
 
@@ -28,7 +29,7 @@ TYPE_AGENT_LABELS = {0: "Détaillant", 1: "Master", 2: "Sous-distributeur"}
 
 
 @router.get("/stats")
-async def get_fraude_stats(db: AsyncSession = Depends(get_db)):
+async def get_fraude_stats(current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """KPIs depuis prediction_fraude (is_latest=TRUE)."""
     result = await db.execute(
         text("""
@@ -70,7 +71,7 @@ async def get_fraude_stats(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/pending-count")
-async def get_pending_count(db: AsyncSession = Depends(get_db)):
+async def get_pending_count(current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """Nombre de transactions dans features_fraude sans prédiction active."""
     result = await db.execute(text("""
         SELECT COUNT(*) FROM features_fraude ff
@@ -84,6 +85,7 @@ async def get_pending_count(db: AsyncSession = Depends(get_db)):
 
 @router.get("/predictions")
 async def get_fraude_predictions(
+    current_user: RequireDashboard,
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     fraude_flag: int | None = Query(None, description="0=Normale | 1=Frauduleuse"),
@@ -124,7 +126,7 @@ async def get_fraude_predictions(
 
 
 @router.get("/transaction/{transaction_id}")
-async def get_transaction_fraude(transaction_id: int, db: AsyncSession = Depends(get_db)):
+async def get_transaction_fraude(transaction_id: int, current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """Prédiction active + features complètes d'une transaction."""
     result = await db.execute(
         text("""
@@ -153,7 +155,7 @@ async def get_transaction_fraude(transaction_id: int, db: AsyncSession = Depends
 
 
 @router.get("/history/{transaction_id}")
-async def get_fraude_history(transaction_id: int, db: AsyncSession = Depends(get_db)):
+async def get_fraude_history(transaction_id: int, current_user: RequireDashboard, db: AsyncSession = Depends(get_db)):
     """Historique complet des prédictions d'une transaction."""
     result = await db.execute(
         text("""
@@ -168,7 +170,7 @@ async def get_fraude_history(transaction_id: int, db: AsyncSession = Depends(get
 
 
 @router.post("/run")
-async def run_fraude_detection(db: AsyncSession = Depends(get_db)):
+async def run_fraude_detection(current_user: RequireModelRun, db: AsyncSession = Depends(get_db)):
     """
     Inférence fraude sur features_fraude non encore traitées :
     1. Lit features_fraude WHERE transaction_id NOT IN (prediction_fraude is_latest)

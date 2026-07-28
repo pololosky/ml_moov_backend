@@ -26,6 +26,8 @@ from sqlalchemy import text
 import pandas as pd
 
 from app.database import get_db
+from app.utils import clean_row, clean_rows  # noqa: F401
+from app.auth import RequireImport
 
 router = APIRouter(prefix="/api/import", tags=["Import Excel"])
 
@@ -159,6 +161,7 @@ def _extract_error_message(exc: Exception) -> str:
 
 @router.post("/upload")
 async def import_upload(
+    current_user: RequireImport,
     file: UploadFile = File(...),
     table_override: str | None = Form(None, description="Forcer la table cible (optionnel)"),
     db: AsyncSession = Depends(get_db),
@@ -375,18 +378,14 @@ async def import_upload(
 @router.post("/{table_name}")
 async def import_by_table(
     table_name: str,
+    current_user: RequireImport,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Route alternative : forcer la table cible via l'URL.
-    Utilisée par l'interface import pour les tables connues.
-    """
+    """Route alternative : forcer la table cible via l'URL."""
     if table_name not in TABLE_COLUMNS:
         raise HTTPException(400, f"Table '{table_name}' non supportée.")
-    # Réutiliser la logique principale
-    from fastapi import Request
-    return await import_upload(file=file, table_override=table_name, db=db)
+    return await import_upload(current_user=current_user, file=file, table_override=table_name, db=db)
 
 
 @router.get("/template/{table_name}")
