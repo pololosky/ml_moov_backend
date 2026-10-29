@@ -19,7 +19,7 @@ from app.database import get_db
 from app.ml.model_loader import ml_models
 from app.config import settings
 from app.utils import clean_row, clean_rows
-from app.auth import RequireDashboard, RequireModelRun
+from app.auth import RequireDashboard, RequireModelRun, RequireExport
 
 router = APIRouter(prefix="/api/fraude", tags=["Fraude"])
 
@@ -89,13 +89,26 @@ async def get_fraude_predictions(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     fraude_flag: int | None = Query(None, description="0=Normale | 1=Frauduleuse"),
+    search: str | None = Query(None, description="Recherche par transaction_id"),
     db: AsyncSession = Depends(get_db),
 ):
     """Prédictions actives (is_latest=TRUE) paginées, avec contexte agent."""
     offset = (page - 1) * size
     conditions = ["pf.is_latest = TRUE"]
+    params: dict = {"size": size, "offset": offset}
+
     if fraude_flag is not None:
         conditions.append(f"pf.fraude_flag = {fraude_flag}")
+    if search:
+        # transaction_id est un entier — on filtre si la valeur est un entier valide
+        if search.isdigit():
+            conditions.append("pf.transaction_id = :search_id")
+            params["search_id"] = int(search)
+        else:
+            # sinon on cherche par agent_id
+            conditions.append("ff.agent_id ILIKE :search")
+            params["search"] = f"{search}%"
+
     where = "WHERE " + " AND ".join(conditions)
 
     result = await db.execute(
@@ -112,15 +125,17 @@ async def get_fraude_predictions(
             ORDER BY pf.score_fraude DESC
             LIMIT :size OFFSET :offset
         """),
-        {"size": size, "offset": offset},
+        params,
     )
     rows = [clean_row(dict(r)) for r in result.mappings()]
     for r in rows:
         r["region_label"] = REGION_LABELS.get(r.get("region"), str(r.get("region")))
         r["type_label"] = TYPE_TX_LABELS.get(r.get("type_transaction"), str(r.get("type_transaction")))
 
+    count_params = {k: v for k, v in params.items() if k not in ("size", "offset")}
     count_result = await db.execute(
-        text(f"SELECT COUNT(*) FROM prediction_fraude pf {where}")
+        text(f"SELECT COUNT(*) FROM prediction_fraude pf JOIN features_fraude ff ON pf.transaction_id = ff.transaction_id {where}"),
+        count_params,
     )
     return {"data": rows, "total": count_result.scalar() or 0, "page": page, "size": size}
 
@@ -238,3 +253,48 @@ async def run_fraude_detection(current_user: RequireModelRun, db: AsyncSession =
     )
     await db.commit()
     return {"message": f"{inserted} prédictions fraude insérées (run #{run_id})", "count": inserted, "run_id": run_id}
+
+
+@router.get("/export/csv")
+async def export_fraude_csv(
+    current_user: RequireExport,
+    fraude_flag: int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export CSV complet des prédictions fraude (is_latest=TRUE)."""
+    import io, csv
+    from fastapi.responses import StreamingResponse
+
+    conditions = ["pf.is_latest = TRUE"]
+    if fraude_flag is not None:
+        conditions.append(f"pf.fraude_flag = {fraude_flag}")
+    where = "WHERE " + " AND ".join(conditions)
+
+    result = await db.execute(text(f"""
+        SELECT pf.transaction_id, pf.score_fraude, pf.fraude_flag, pf.predicted_at,
+               ff.agent_id, ff.type_transaction, ff.montant_fcfa,
+               ff.region, ff.nb_tx_24h, ff.ecart_zone_habituelle,
+               ff.ratio_montant_plafond, ff.depassement_plafond, ff.variation_solde
+        FROM prediction_fraude pf
+        JOIN features_fraude ff ON pf.transaction_id = ff.transaction_id
+        {where}
+        ORDER BY pf.score_fraude DESC
+    """))
+    rows = [dict(r) for r in result.mappings()]
+
+    output = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(output, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        for r in rows:
+            cleaned = clean_row(r)
+            cleaned["region"] = REGION_LABELS.get(cleaned.get("region"), cleaned.get("region"))
+            cleaned["type_transaction"] = TYPE_TX_LABELS.get(cleaned.get("type_transaction"), cleaned.get("type_transaction"))
+            writer.writerow(cleaned)
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=fraude_predictions.csv"},
+    )

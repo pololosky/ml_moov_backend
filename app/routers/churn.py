@@ -16,7 +16,7 @@ from app.database import get_db
 from app.ml.model_loader import ml_models
 from app.config import settings
 from app.utils import clean_row, clean_rows
-from app.auth import RequireDashboard, RequireModelRun
+from app.auth import RequireDashboard, RequireModelRun, RequireExport
 
 router = APIRouter(prefix="/api/churn", tags=["Churn"])
 
@@ -86,11 +86,21 @@ async def get_churn_predictions(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     churn_flag: int | None = Query(None, description="0=Non churné | 1=Churné"),
+    search: str | None = Query(None, description="Recherche par client_id (préfixe)"),
     db: AsyncSession = Depends(get_db),
 ):
     """Dernières prédictions actives (is_latest=TRUE), paginées."""
     offset = (page - 1) * size
-    flag_filter = f"AND pc.churn_flag = {churn_flag}" if churn_flag is not None else ""
+    conditions = ["pc.is_latest = TRUE"]
+    params: dict = {"size": size, "offset": offset}
+
+    if churn_flag is not None:
+        conditions.append(f"pc.churn_flag = {churn_flag}")
+    if search:
+        conditions.append("pc.client_id ILIKE :search")
+        params["search"] = f"{search}%"
+
+    where = "WHERE " + " AND ".join(conditions)
 
     result = await db.execute(
         text(f"""
@@ -101,19 +111,21 @@ async def get_churn_predictions(
                    fc.nb_demandes_resiliation, fc.satisfaction_moy
             FROM prediction_churn pc
             JOIN features_churn fc ON pc.client_id = fc.client_id
-            WHERE pc.is_latest = TRUE {flag_filter}
+            {where}
             ORDER BY pc.score_churn DESC
             LIMIT :size OFFSET :offset
         """),
-        {"size": size, "offset": offset},
+        params,
     )
     rows = [clean_row(dict(r)) for r in result.mappings()]
     for r in rows:
         r["region_label"] = REGION_LABELS.get(r.get("region"), str(r.get("region")))
         r["type_client_label"] = TYPE_CLIENT_LABELS.get(r.get("type_client"), str(r.get("type_client")))
 
+    count_params = {k: v for k, v in params.items() if k not in ("size", "offset")}
     count_result = await db.execute(
-        text(f"SELECT COUNT(*) FROM prediction_churn pc WHERE pc.is_latest = TRUE {flag_filter}")
+        text(f"SELECT COUNT(*) FROM prediction_churn pc JOIN features_churn fc ON pc.client_id = fc.client_id {where}"),
+        count_params,
     )
     return {"data": rows, "total": count_result.scalar() or 0, "page": page, "size": size}
 
@@ -238,3 +250,44 @@ async def get_churn_history(client_id: str, current_user: RequireDashboard, db: 
         {"id": client_id},
     )
     return clean_rows([dict(r) for r in result.mappings()])
+
+
+@router.get("/export/csv")
+async def export_churn_csv(
+    current_user: RequireExport,
+    churn_flag: int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export CSV complet des prédictions churn (is_latest=TRUE)."""
+    import io, csv
+    from fastapi.responses import StreamingResponse
+
+    flag_filter = f"AND pc.churn_flag = {churn_flag}" if churn_flag is not None else ""
+    result = await db.execute(text(f"""
+        SELECT pc.client_id, pc.score_churn, pc.churn_flag, pc.horizon_jours,
+               pc.predicted_at, fc.region, fc.type_client, fc.anciennete_mois,
+               fc.arpu_moyen_fcfa, fc.nb_reclamations,
+               fc.nb_demandes_resiliation, fc.satisfaction_moy
+        FROM prediction_churn pc
+        JOIN features_churn fc ON pc.client_id = fc.client_id
+        WHERE pc.is_latest = TRUE {flag_filter}
+        ORDER BY pc.score_churn DESC
+    """))
+    rows = [dict(r) for r in result.mappings()]
+
+    output = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(output, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        for r in rows:
+            cleaned = clean_row(r)
+            cleaned["region"] = REGION_LABELS.get(cleaned.get("region"), cleaned.get("region"))
+            cleaned["type_client"] = TYPE_CLIENT_LABELS.get(cleaned.get("type_client"), cleaned.get("type_client"))
+            writer.writerow(cleaned)
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=churn_predictions.csv"},
+    )

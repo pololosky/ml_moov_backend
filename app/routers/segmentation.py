@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.ml.model_loader import ml_models
 from app.utils import clean_row, clean_rows
-from app.auth import RequireDashboard, RequireModelRun
+from app.auth import RequireDashboard, RequireModelRun, RequireExport
 
 router = APIRouter(prefix="/api/segmentation", tags=["Segmentation"])
 
@@ -127,15 +127,22 @@ async def get_segmentation_predictions(
     size: int = Query(50, ge=1, le=200),
     segment_id: int | None = Query(None),
     region: int | None = Query(None),
+    search: str | None = Query(None, description="Recherche par client_id (préfixe)"),
     db: AsyncSession = Depends(get_db),
 ):
     """Clients segmentés (is_latest=TRUE), avec label de segment et features clés."""
     offset = (page - 1) * size
     conditions = ["ps.is_latest = TRUE"]
+    params: dict = {"size": size, "offset": offset}
+
     if segment_id is not None:
         conditions.append(f"ps.segment_id = {segment_id}")
     if region is not None:
         conditions.append(f"fs.region = {region}")
+    if search:
+        conditions.append("ps.client_id ILIKE :search")
+        params["search"] = f"{search}%"
+
     where = "WHERE " + " AND ".join(conditions)
 
     result = await db.execute(
@@ -153,19 +160,21 @@ async def get_segmentation_predictions(
             ORDER BY ps.segment_id, ps.client_id
             LIMIT :size OFFSET :offset
         """),
-        {"size": size, "offset": offset},
+        params,
     )
     rows = [clean_row(dict(r)) for r in result.mappings()]
     for r in rows:
         r["region_label"] = REGION_LABELS.get(r.get("region"), str(r.get("region")))
         r["type_client_label"] = TYPE_CLIENT_LABELS.get(r.get("type_client"), str(r.get("type_client")))
 
+    count_params = {k: v for k, v in params.items() if k not in ("size", "offset")}
     count_result = await db.execute(
         text(f"""
             SELECT COUNT(*) FROM prediction_segment ps
             JOIN features_segmentation fs ON ps.client_id = fs.client_id
             {where}
-        """)
+        """),
+        count_params,
     )
     return {"data": rows, "total": count_result.scalar() or 0, "page": page, "size": size}
 
@@ -307,3 +316,51 @@ async def run_segmentation(
         "count": inserted,
         "run_id": run_id,
     }
+
+
+@router.get("/export/csv")
+async def export_segmentation_csv(
+    current_user: RequireExport,
+    segment_id: int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export CSV complet des clients segmentés (is_latest=TRUE)."""
+    import io, csv
+    from fastapi.responses import StreamingResponse
+
+    conditions = ["ps.is_latest = TRUE"]
+    if segment_id is not None:
+        conditions.append(f"ps.segment_id = {segment_id}")
+    where = "WHERE " + " AND ".join(conditions)
+
+    result = await db.execute(text(f"""
+        SELECT ps.client_id, ps.segment_id,
+               COALESCE(sd.label, 'Segment ' || ps.segment_id::text) AS segment_label,
+               ps.predicted_at,
+               fs.region, fs.type_client, fs.anciennete_mois,
+               fs.arpu_moyen_fcfa, fs.smartphone_flag,
+               fs.voix_out_moy, fs.data_moy, fs.solde_moy, fs.tx_flooz_moy
+        FROM prediction_segment ps
+        JOIN features_segmentation fs ON ps.client_id = fs.client_id
+        LEFT JOIN segment_definition sd ON ps.segment_id = sd.segment_id
+        {where}
+        ORDER BY ps.segment_id, ps.client_id
+    """))
+    rows = [dict(r) for r in result.mappings()]
+
+    output = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(output, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        for r in rows:
+            cleaned = clean_row(r)
+            cleaned["region"] = REGION_LABELS.get(cleaned.get("region"), cleaned.get("region"))
+            cleaned["type_client"] = TYPE_CLIENT_LABELS.get(cleaned.get("type_client"), cleaned.get("type_client"))
+            writer.writerow(cleaned)
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=segmentation_clients.csv"},
+    )
