@@ -1,5 +1,6 @@
-from sqlalchemy import String, Integer, Boolean, Date, Numeric, ForeignKey
+from sqlalchemy import String, Integer, Boolean, Date, Numeric, TIMESTAMP, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql import func
 from app.database import Base
 
 
@@ -19,9 +20,13 @@ class DimClient(Base):
     arpu_moyen_fcfa: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     statut_ligne: Mapped[str] = mapped_column(String(20), nullable=False)
     date_reference: Mapped[str] = mapped_column(Date, nullable=False)
+    inserted_at: Mapped[str | None] = mapped_column(TIMESTAMP, server_default=func.now())
+    updated_at: Mapped[str | None] = mapped_column(TIMESTAMP, server_default=func.now())
 
     forfait: Mapped["DimForfait"] = relationship("DimForfait", back_populates="clients")
     consommations: Mapped[list["FactConsoMensuelle"]] = relationship("FactConsoMensuelle", back_populates="client")
     evenements: Mapped[list["FactEvenementServiceClient"]] = relationship("FactEvenementServiceClient", back_populates="client")
-    churn_data: Mapped["Churn | None"] = relationship("Churn", back_populates="client", uselist=False)
-    segmentation_data: Mapped["Segmentation | None"] = relationship("Segmentation", back_populates="client", uselist=False)
+    features_churn: Mapped["FeaturesChurn | None"] = relationship("FeaturesChurn", back_populates="client", uselist=False)
+    features_segmentation: Mapped["FeaturesSegmentation | None"] = relationship("FeaturesSegmentation", back_populates="client", uselist=False)
+    predictions_churn: Mapped[list["PredictionChurn"]] = relationship("PredictionChurn", back_populates="client")
+    predictions_segment: Mapped[list["PredictionSegment"]] = relationship("PredictionSegment", back_populates="client")

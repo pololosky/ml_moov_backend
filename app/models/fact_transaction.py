@@ -1,5 +1,6 @@
-from sqlalchemy import String, BigInteger, Boolean, TIMESTAMP, Numeric, SmallInteger, Integer, ForeignKey
+from sqlalchemy import String, BigInteger, Boolean, TIMESTAMP, Numeric, Integer, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql import func
 from app.database import Base
 
 
@@ -18,7 +19,8 @@ class FactTransactionAgent(Base):
     solde_apres_fcfa: Mapped[float] = mapped_column(Numeric(16, 2), nullable=False)
     nb_tx_24h: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ecart_zone_habituelle: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    fraude_flag: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)
+    inserted_at: Mapped[str | None] = mapped_column(TIMESTAMP, server_default=func.now())
 
     agent: Mapped["DimAgent"] = relationship("DimAgent", back_populates="transactions")
-    fraude_data: Mapped["Fraude | None"] = relationship("Fraude", back_populates="transaction", uselist=False)
+    features_fraude: Mapped["FeaturesFraude | None"] = relationship("FeaturesFraude", back_populates="transaction", uselist=False)
+    predictions_fraude: Mapped[list["PredictionFraude"]] = relationship("PredictionFraude", back_populates="transaction")
