@@ -4,14 +4,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.ml.model_loader import ml_models
-from app.routers import churn, segmentation, fraude, import_excel, dashboard
+from app.routers import churn, segmentation, fraude, import_excel, dashboard, live
 from app import auth
+from app.data_generator import start_generator as start_data_gen
+from app.data_generator import stop_generator as stop_generator_task
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ml_models.load_all()
+    # Démarrer le générateur de données automatique
+    start_data_gen()
     yield
+    stop_generator_task()
 
 
 app = FastAPI(
@@ -34,6 +39,7 @@ app.include_router(auth.router)
 
 # Routes métier (protégées par dépendances RBAC internes à chaque router)
 app.include_router(dashboard.router)
+app.include_router(live.router)
 app.include_router(churn.router)
 app.include_router(segmentation.router)
 app.include_router(fraude.router)
